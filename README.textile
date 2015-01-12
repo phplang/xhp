@@ -1,3 +1,11 @@
+h1. Archived Repo
+
+This is an archived project and is no longer supported or updated by Facebook. Please do not file issues or pull-requests against this repo. If you wish to continue to develop this code yourself, we recommend you fork it.
+
+This project just contains the PHP5 extension and core tests. The class library
+(which is required with both this extension and with HHVM) is available at
+https://github.com/facebook/xhp-lib/ and is still supported.
+
 h1. Introduction
 
 
