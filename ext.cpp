@@ -29,6 +29,18 @@
 #include <string>
 #include <sstream>
 #include <iostream>
+
+#ifdef ZEND_ENGINE_3
+# define XHP_ZVAL_STRINGL(pzv, str, len) ZVAL_STRINGL(pzv, str, len)
+# define xhp_add_assoc_string(pzv, key, val) add_assoc_string(pzv, key, val)
+# define CG5(v) 0
+#else
+# define XHP_ZVAL_STRINGL(pzv, str, len) ZVAL_STRINGL(pzv, str, len, 1)
+# define xhp_add_assoc_string(pzv, key, val) add_assoc_string(pzv, key, val, 1)
+# define CG5(v) CG(v)
+typedef long zend_long;
+#endif
+
 using namespace std;
 
 //
@@ -157,8 +169,8 @@ static zend_op_array* xhp_compile_file(zend_file_handle* f, int type TSRMLS_DC) 
   string* code_to_give_to_php;
 
   memset(&flags, 0, sizeof(xhp_flags_t));
-  flags.asp_tags = CG(asp_tags);
-  flags.short_tags = CG(short_tags);
+  flags.asp_tags = CG5(asp_tags);
+  flags.short_tags = CG5(short_tags);
   flags.idx_expr = XHPG(idx_expr);
   flags.include_debug = XHPG(include_debug);
 #if PHP_VERSION_ID >= 50300
@@ -172,7 +184,15 @@ static zend_op_array* xhp_compile_file(zend_file_handle* f, int type TSRMLS_DC) 
     // Bubble error up to PHP
     CG(in_compilation) = true;
     CG(zend_lineno) = error_lineno;
+#ifdef ZEND_ENGINE_3
+    {
+      zend_string *str = zend_string_init(f->filename, strlen(f->filename), 0);
+      zend_set_compiled_filename(str);
+      zend_string_release(str);
+    }
+#else
     zend_set_compiled_filename(const_cast<char*>(f->filename) TSRMLS_CC);
+#endif
     zend_error(E_PARSE, "%s", error_str.c_str());
     zend_bailout();
   } else if (result == XHPRewrote) {
@@ -183,7 +203,11 @@ static zend_op_array* xhp_compile_file(zend_file_handle* f, int type TSRMLS_DC) 
 
   // Create a fake file to give back to PHP to handle
   zend_file_handle fake_file;
+#ifdef ZEND_ENGINE_3
+  fake_file.opened_path = f->opened_path ? zend_string_copy(f->opened_path) : NULL;
+#else
   fake_file.opened_path = f->opened_path ? estrdup(f->opened_path) : NULL;
+#endif
   fake_file.filename = f->filename;
   fake_file.free_filename = false;
 
@@ -222,13 +246,13 @@ static zend_op_array* xhp_compile_string(zval* str, char *filename TSRMLS_DC) {
   // Cast to str
   zval tmp;
   char* val;
-  if (str->type != IS_STRING) {
+  if (Z_TYPE_P(str) != IS_STRING) {
     tmp = *str;
     zval_copy_ctor(&tmp);
     convert_to_string(&tmp);
-    val = tmp.value.str.val;
+    val = Z_STRVAL(tmp);
   } else {
-    val = str->value.str.val;; 
+    val = Z_STRVAL_P(str);
   }
 
   // Process XHP
@@ -239,8 +263,8 @@ static zend_op_array* xhp_compile_string(zval* str, char *filename TSRMLS_DC) {
   xhp_flags_t flags;
 
   memset(&flags, 0, sizeof(xhp_flags_t));
-  flags.asp_tags = CG(asp_tags);
-  flags.short_tags = CG(short_tags);
+  flags.asp_tags = CG5(asp_tags);
+  flags.short_tags = CG5(short_tags);
   flags.idx_expr = XHPG(idx_expr);
   flags.include_debug = XHPG(include_debug);
   flags.force_global_namespace = XHPG(force_global_namespace);
@@ -248,7 +272,7 @@ static zend_op_array* xhp_compile_string(zval* str, char *filename TSRMLS_DC) {
   XHPResult result = xhp_preprocess(original_code, rewrit, error_str, error_lineno, flags);
 
   // Destroy temporary in the case of non-string input (why?)
-  if (str->type != IS_STRING) {
+  if (Z_TYPE_P(str) != IS_STRING) {
     zval_dtor(&tmp);
   }
 
@@ -265,11 +289,9 @@ static zend_op_array* xhp_compile_string(zval* str, char *filename TSRMLS_DC) {
   } else if (result == XHPRewrote) {
 
     // Create another tmp zval with the rewritten PHP code and pass it to the original function
-    INIT_ZVAL(tmp);
-    tmp.type = IS_STRING;
-    tmp.value.str.val = const_cast<char*>(rewrit.c_str());
-    tmp.value.str.len = rewrit.size();
+    XHP_ZVAL_STRINGL(&tmp, rewrit.c_str(), rewrit.size());
     zend_op_array* ret = dist_compile_string(&tmp, filename TSRMLS_CC);
+    zval_dtor(&tmp);
     return ret;
   } else {
     return dist_compile_string(str, filename TSRMLS_CC);
@@ -300,9 +322,12 @@ static PHP_MINIT_FUNCTION(xhp) {
 
   REGISTER_INI_ENTRIES();
 
+#ifndef ZEND_ENGINE_3
   // APC has this crazy magic api you can use to avoid the race condition for when an extension overwrites
   // the compile_file function. The desired order here is APC -> XHP -> PHP, that way APC can cache the
   // file as usual.
+  //
+  // We can use module dependency as of 5.2, so just forget this for PHP7
   zend_module_entry *apc_lookup;
   zend_constant *apc_magic;
   if (zend_hash_find(&module_registry, "apc", sizeof("apc"), (void**)&apc_lookup) != FAILURE &&
@@ -310,7 +335,9 @@ static PHP_MINIT_FUNCTION(xhp) {
     zend_compile_file_t* (*apc_set_compile_file)(zend_compile_file_t*) = (zend_compile_file_t* (*)(zend_compile_file_t*))apc_magic->value.value.lval;
     dist_compile_file = apc_set_compile_file(NULL);
     apc_set_compile_file(xhp_compile_file);
-  } else {
+  } else
+#endif
+  {
     dist_compile_file = zend_compile_file;
     zend_compile_file = xhp_compile_file;
   }
@@ -337,6 +364,88 @@ static PHP_MINFO_FUNCTION(xhp) {
   php_info_print_table_end();
 }
 
+static inline void do_xhp_array(zval *return_value, zval *dict, zval *offset TSRMLS_DC) {
+  switch (Z_TYPE_P(offset)) {
+    case IS_NULL:
+#ifdef ZEND_ENGINE_3
+      if (zval *value = zend_hash_str_find(Z_ARRVAL_P(dict), "", 0)) {
+        ZVAL_ZVAL(return_value, value, 1, 0);
+        return;
+      }
+#else
+      zval **value;
+      if (zend_hash_find(Z_ARRVAL_P(dict), "", 0, (void**)&value) == SUCCESS) {
+        ZVAL_ZVAL(return_value, *value, 1, 0);
+        return;
+      }
+#endif
+      zend_error(E_NOTICE, "Undefined index: ");
+      RETURN_NULL();
+
+#ifdef ZEND_ENGINE_3
+    case IS_TRUE:
+    case IS_FALSE: {
+      zend_long lval = (Z_TYPE_P(offset) == IS_TRUE) ? 1 : 0;
+      if (zval *value = zend_hash_index_find(Z_ARRVAL_P(dict), lval)) {
+        ZVAL_ZVAL(return_value, value, 1, 0);
+        return;
+      }
+      zend_error(E_NOTICE, "Undefined offset:  %ld", lval);
+      RETURN_NULL();
+    }
+#endif
+
+    case IS_RESOURCE:
+      zend_error(E_STRICT, "Resource ID#%ld used as offset, casting to integer (%ld)", Z_LVAL_P(offset), Z_LVAL_P(offset));
+      /* fallthrough */
+    case IS_DOUBLE:
+#ifndef ZEND_ENGINE_3
+    case IS_BOOL:
+      /* fallthrough */
+#endif
+    case IS_LONG:
+      {
+        zend_long loffset = (Z_TYPE_P(offset) == IS_DOUBLE) ? (zend_long)Z_DVAL_P(offset) : Z_LVAL_P(offset);
+#ifdef ZEND_ENGINE_3
+        if (zval *value = zend_hash_index_find(Z_ARRVAL_P(dict), loffset)) {
+          ZVAL_ZVAL(return_value, value, 1, 0);
+          return;
+        }
+#else
+        zval **value;
+        if (zend_hash_index_find(Z_ARRVAL_P(dict), loffset, (void **) &value) == SUCCESS) {
+          ZVAL_ZVAL(return_value, *value, 1, 0);
+          return;
+        }
+#endif
+        zend_error(E_NOTICE, "Undefined offset:  %ld", loffset);
+        RETURN_NULL();
+      }
+
+    case IS_STRING:
+#ifdef ZEND_ENGINE_3
+      if (zval *value = zend_symtable_find(Z_ARRVAL_P(dict), Z_STR_P(offset))) {
+        ZVAL_ZVAL(return_value, value, 1, 0);
+        return;
+      }
+#else
+    {
+      zval **value;
+      if (zend_symtable_find(Z_ARRVAL_P(dict), Z_STRVAL_P(offset), Z_STRLEN_P(offset) + 1, (void **) &value) == SUCCESS) {
+        ZVAL_ZVAL(return_value, *value, 1, 0);
+        return;
+      }
+    }
+#endif
+      zend_error(E_NOTICE, "Undefined index:  %s", Z_STRVAL_P(offset));
+      RETURN_NULL();
+
+    default:
+      zend_error(E_WARNING, "Illegal offset type");
+      RETURN_NULL();
+  }
+}
+
 //
 // __xhp_idx
 ZEND_FUNCTION(__xhp_idx) {
@@ -349,70 +458,34 @@ ZEND_FUNCTION(__xhp_idx) {
     //
     // These are always NULL
     case IS_NULL:
+#ifdef ZEND_ENGINE_3
+    case IS_TRUE:
+    case IS_FALSE:
+#else
     case IS_BOOL:
+#endif
     case IS_LONG:
     case IS_DOUBLE:
     default:
       RETURN_NULL();
       break;
 
-    //
-    // array()[] -- Array index
     case IS_ARRAY:
-      switch (Z_TYPE_P(offset)) {
-        case IS_RESOURCE:
-          zend_error(E_STRICT, "Resource ID#%ld used as offset, casting to integer (%ld)", Z_LVAL_P(offset), Z_LVAL_P(offset));
-          /* Fall Through */
-        case IS_DOUBLE:
-        case IS_BOOL:
-        case IS_LONG:
-          long loffset;
-          zval **value;
-          if (Z_TYPE_P(offset) == IS_DOUBLE) {
-            loffset = (long)Z_DVAL_P(offset);
-          } else {
-            loffset = Z_LVAL_P(offset);
-          }
-          if (zend_hash_index_find(Z_ARRVAL_P(dict), loffset, (void **) &value) == SUCCESS) {
-            *return_value = **value;
-            break;
-          }
-          zend_error(E_NOTICE, "Undefined offset:  %ld", loffset);
-          RETURN_NULL();
-          break;
-
-        case IS_STRING:
-          if (zend_symtable_find(Z_ARRVAL_P(dict), offset->value.str.val, offset->value.str.len+1, (void **) &value) == SUCCESS) {
-            *return_value = **value;
-            break;
-          }
-          zend_error(E_NOTICE, "Undefined index:  %s", offset->value.str.val);
-          RETURN_NULL();
-          break;
-
-        case IS_NULL:
-          if (zend_hash_find(Z_ARRVAL_P(dict), "", sizeof(""), (void **) &value) == SUCCESS) {
-            *return_value = **value;
-            break;
-          }
-          zend_error(E_NOTICE, "Undefined index:  ");
-          RETURN_NULL();
-          break;
-
-        default:
-          zend_error(E_WARNING, "Illegal offset type");
-          RETURN_NULL();
-          break;
-      }
-      break;
+      do_xhp_array(return_value, dict, offset TSRMLS_CC);
+      return;
 
     //
     // 'string'[] -- String offset
-    case IS_STRING:
+    case IS_STRING: {
       long loffset;
       switch (Z_TYPE_P(offset)) {
+#ifdef ZEND_ENGINE_3
+        case IS_TRUE:  loffset = 1; break;
+        case IS_FALSE: loffset = 0; break;
+#else
+        case IS_BOOL:  /* fallthrough */
+#endif
         case IS_LONG:
-        case IS_BOOL:
           loffset = Z_LVAL_P(offset);
           break;
 
@@ -426,7 +499,7 @@ ZEND_FUNCTION(__xhp_idx) {
 
         case IS_STRING: {
           zval tmp = *offset;
-          zval_copy_ctor(&tmp);
+          ZVAL_ZVAL(&tmp, offset, 1, 0);
           convert_to_long(&tmp);
           loffset = Z_LVAL(tmp);
           zval_dtor(&tmp);
@@ -442,8 +515,9 @@ ZEND_FUNCTION(__xhp_idx) {
         zend_error(E_NOTICE, "Uninitialized string offset: %ld", loffset);
         RETURN_NULL();
       }
-      RETURN_STRINGL(Z_STRVAL_P(dict) + loffset, 1, true);
-      break;
+      XHP_ZVAL_STRINGL(return_value, Z_STRVAL_P(dict) + loffset, 1);
+      return;
+    }
 
     //
     // (new foo)[] -- Object overload (ArrayAccess)
@@ -452,16 +526,20 @@ ZEND_FUNCTION(__xhp_idx) {
         zend_error(E_ERROR, "Cannot use object as array");
         RETURN_NULL();
       } else {
+#ifdef ZEND_ENGINE_3
+        zval rv;
+        zval* overloaded_result = Z_OBJ_HT_P(dict)->read_dimension(dict, offset, BP_VAR_R, &rv);
+#else
         zval* overloaded_result = Z_OBJ_HT_P(dict)->read_dimension(dict, offset, BP_VAR_R TSRMLS_CC);
+#endif
         if (overloaded_result) {
-          *return_value = *overloaded_result;
+          ZVAL_ZVAL(return_value, overloaded_result, 1, 1);
         } else {
           RETURN_NULL();
         }
       }
       break;
   }
-  zval_copy_ctor(return_value);
 }
 
 //
@@ -483,10 +561,10 @@ ZEND_FUNCTION(xhp_preprocess_code) {
   // Build return code
   array_init(return_value);
   if (result == XHPErred) {
-    add_assoc_string(return_value, "error", const_cast<char*>(error.c_str()), true);
+    xhp_add_assoc_string(return_value, "error", const_cast<char*>(error.c_str()));
     add_assoc_long(return_value, "error_line", error_line);
   } else if (result == XHPRewrote) {
-    add_assoc_string(return_value, "new_code", const_cast<char*>(rewrit.c_str()), true);
+    xhp_add_assoc_string(return_value, "new_code", const_cast<char*>(rewrit.c_str()));
   }
 }
 
@@ -498,8 +576,22 @@ zend_function_entry xhp_functions[] = {
   {NULL, NULL, NULL}
 };
 
+#if ZEND_MODULE_API_NO >= 20041225
+static zend_module_dep xhp_module_deps[] = {
+  /* Load any opcache first so that xhplib becomes the first pass */
+  ZEND_MOD_OPTIONAL("apc")
+  ZEND_MOD_OPTIONAL("Zend OPcache")
+  { NULL, NULL, NULL }
+};
+#endif
+
 zend_module_entry xhp_module_entry = {
+#if ZEND_MODULE_API_NO >= 20041225
+  STANDARD_MODULE_HEADER_EX, NULL,
+  xhp_module_deps,
+#else
   STANDARD_MODULE_HEADER,
+#endif
   PHP_XHP_EXTNAME,
   xhp_functions,
   PHP_MINIT(xhp),
