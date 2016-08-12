@@ -10,4 +10,4 @@ echo $foo->getDocComment();
 exit;
 <a />;
 --EXPECT--
-/** d */
+/** e */
