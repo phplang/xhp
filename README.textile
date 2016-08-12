@@ -1,13 +1,17 @@
 h1. Archived Repo
 
-This is an archived project and is no longer supported or updated by Facebook. Please do not file issues or pull-requests against this repo. If you wish to continue to develop this code yourself, we recommend you fork it.
+This project is a fork from Facebook's archive repo at https://github.com/facebookarchive/xhp-php5-extension
 
-This project just contains the PHP5 extension and core tests. The class library
-(which is required with both this extension and with HHVM) is available at
-https://github.com/facebook/xhp-lib/ and is still supported.
+PHP7 support is provided as a community project and not by Facebook, nor is this fork endorsed by the company.
+
+This project just contains the PHP extension and core tests. The class library
+(which is required for this extension to be useful) is available at
+https://github.com/phplang/xhp-lib .
+
+HHVM users get XHP support by default in HackLang files, and should use the official
+HackLang XHP library at https://github.com/facebook/xhp-lib
 
 h1. Introduction
-
 
 XHP is a PHP extension which augments the syntax of the language such that XML document fragments become valid PHP expressions. This allows you to use PHP as a stricter templating engine and offers much more straightforward implementation of reusable components.
 
