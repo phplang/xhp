@@ -382,6 +382,7 @@ NEWLINE ("\r\n"|"\n"|"\r")
   "^=" tok(T_XOR_EQUAL);
   "<<=" tok(T_SL_EQUAL);
   ">>=" tok(T_SR_EQUAL);
+  "**=" tok(T_POW_EQUAL);
   "||" tok(T_BOOLEAN_OR);
   "&&" tok(T_BOOLEAN_AND);
   "==" tok(T_IS_EQUAL);
@@ -397,6 +398,9 @@ NEWLINE ("\r\n"|"\n"|"\r")
   "->" tok(T_OBJECT_OPERATOR);
   "=>" tok(T_DOUBLE_ARROW);
   "::" tok(T_PAAMAYIM_NEKUDOTAYIM);
+  "**" tok(T_POW);
+  "<=>" tok(T_SPACESHIP);
+  "??" tok(T_COALESCE);
   "\\" tok(T_NS_SEPARATOR);
   ":" {
     // A colon can either mean the start (or component) of an XHP class,

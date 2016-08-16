@@ -73,14 +73,15 @@ static void replacestr(string &source, const string &find, const string &rep) {
 %left T_LOGICAL_XOR
 %left T_LOGICAL_AND
 %right T_PRINT
-%left '=' T_PLUS_EQUAL T_MINUS_EQUAL T_MUL_EQUAL T_DIV_EQUAL T_CONCAT_EQUAL T_MOD_EQUAL T_AND_EQUAL T_OR_EQUAL T_XOR_EQUAL T_SL_EQUAL T_SR_EQUAL
+%left '=' T_PLUS_EQUAL T_MINUS_EQUAL T_MUL_EQUAL T_DIV_EQUAL T_CONCAT_EQUAL T_MOD_EQUAL T_AND_EQUAL T_OR_EQUAL T_XOR_EQUAL T_SL_EQUAL T_SR_EQUAL T_POW_EQUAL
 %left '?' ':'
+%right T_COALESCE
 %left T_BOOLEAN_OR
 %left T_BOOLEAN_AND
 %left '|'
 %left '^'
 %left '&'
-%nonassoc T_IS_EQUAL T_IS_NOT_EQUAL T_IS_IDENTICAL T_IS_NOT_IDENTICAL
+%nonassoc T_IS_EQUAL T_IS_NOT_EQUAL T_IS_IDENTICAL T_IS_NOT_IDENTICAL T_SPACESHIP
 %nonassoc '<' T_IS_SMALLER_OR_EQUAL '>' T_IS_GREATER_OR_EQUAL
 %left T_SL T_SR
 %left '+' '-' '.'
@@ -88,6 +89,7 @@ static void replacestr(string &source, const string &find, const string &rep) {
 %right '!'
 %nonassoc T_INSTANCEOF
 %right '~' T_INC T_DEC T_INT_CAST T_DOUBLE_CAST T_STRING_CAST T_UNICODE_CAST T_BINARY_CAST T_ARRAY_CAST T_OBJECT_CAST T_BOOL_CAST T_UNSET_CAST '@'
+%right T_POW
 %right '['
 %nonassoc T_NEW T_CLONE
 %token T_EXIT
@@ -1055,6 +1057,9 @@ expr_without_variable:
 | variable T_SR_EQUAL expr {
     $$ = $1 + $2 + $3;
   }
+| variable T_POW_EQUAL expr {
+    $$ = $1 + $2 + $3;
+  }
 | rw_variable T_INC {
     $$ = $1 + $2;
   }
@@ -1115,6 +1120,12 @@ expr_without_variable:
 | expr T_SR expr {
     $$ = $1 + $2 + $3;
   }
+| expr T_POW expr {
+    $$ = $1 + $2 + $3;
+  }
+| expr T_SPACESHIP expr {
+    $$ = $1 + $2 + $3;
+  }
 | '+' expr %prec T_INC {
     $$ = $1 + $2;
   }
@@ -1162,6 +1173,9 @@ expr_without_variable:
   }
 | expr '?' ':' expr {
     $$ = $1 + $2 + $3 + $4;
+  }
+| expr T_COALESCE expr {
+    $$ = $1 + $2 + $3;
   }
 | internal_functions_in_yacc
 | T_INT_CAST expr {
